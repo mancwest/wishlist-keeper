@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Wishlist Keeper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; background: #EAE6DA; }
+  #root { min-height: 100vh; }
+  * { box-sizing: border-box; }
+</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+const SUPABASE_URL = "https://tlkzuuovqqdvniytpgni.supabase.co";
+const SUPABASE_KEY = "sb_publishable_5KM1-wSwj-00TlvCBJoMDw_iRselgOk";
+const TABLE = "wishlist_items";
+
+const PEOPLE = {
+  tony: { name: "Tony", accent: "#1F4034", accentSoft: "#E4ECE7" },
+  sarah: { name: "Sarah", accent: "#7A2B3A", accentSoft: "#F3E5E7" },
+};
+const OTHER = { tony: "sarah", sarah: "tony" };
+const REFRESH_MS = 15000;
+
+function normalizeLink(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return "https://" + trimmed;
+}
+
+async function supa(path, options = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...options,
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText}${text ? " — " + text : ""}`);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+function App() {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [myItems, setMyItems] = useState([]);
+  const [theirItems, setTheirItems] = useState([]);
+  const [view, setView] = useState("mine");
+  const [form, setForm] = useState({ name: "", link: "", note: "" });
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const pollRef = useRef(null);
+
+  const loadMine = useCallback(async (person) => {
+    const rows = await supa(
+      `${TABLE}?owner=eq.${person}&select=id,name,link,note,created_at&order=created_at.desc`
+    );
+    setMyItems(rows || []);
+  }, []);
+
+  const loadTheirs = useCallback(async (person) => {
+    const rows = await supa(
+      `${TABLE}?owner=eq.${person}&select=id,name,link,note,created_at,claimed_by&order=created_at.desc`
+    );
+    setTheirItems(rows || []);
+  }, []);
+
+  const refreshAll = useCallback(async () => {
+    if (!currentUser) return;
+    try {
+      await Promise.all([loadMine(currentUser), loadTheirs(OTHER[currentUser])]);
+      setError("");
+    } catch (e) {
+      setError("Couldn't reach the server — " + (e && e.message ? e.message : "unknown error"));
+    }
+  }, [currentUser, loadMine, loadTheirs]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    setLoading(true);
+    refreshAll().finally(() => setLoading(false));
+    pollRef.current = setInterval(refreshAll, REFRESH_MS);
+    return () => clearInterval(pollRef.current);
+  }, [currentUser, refreshAll]);
+
+  function chooseUser(person) {
+    setCurrentUser(person);
+  }
+
+  function switchUser() {
+    setCurrentUser(null);
+    setView("mine");
+    setMyItems([]);
+    setTheirItems([]);
+  }
+
+  async function addItem() {
+    setError("");
+    if (!form.name.trim()) {
+      setError("Give it a name before adding it to your list.");
+      return;
+    }
+    const payload = {
+      owner: currentUser,
+      name: form.name.trim(),
+      link: normalizeLink(form.link),
+      note: form.note.trim(),
+    };
+    try {
+      await supa(TABLE, {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify(payload),
+      });
+      setForm({ name: "", link: "", note: "" });
+      await loadMine(currentUser);
+    } catch (e) {
+      setError("Couldn't save that — " + (e && e.message ? e.message : "unknown error"));
+    }
+  }
+
+  async function removeItem(id) {
+    try {
+      await supa(`${TABLE}?id=eq.${id}`, { method: "DELETE" });
+      setMyItems((prev) => prev.filter((i) => i.id !== id));
+    } catch (e) {
+      setError("Couldn't remove that — " + (e && e.message ? e.message : "unknown error"));
+    }
+  }
+
+  async function toggleClaim(item) {
+    const isMine = item.claimed_by === currentUser;
+    const patch = isMine
+      ? { claimed_by: null, claimed_at: null }
+      : { claimed_by: currentUser, claimed_at: new Date().toISOString() };
+    setTheirItems((prev) =>
+      prev.map((i) => (i.id === item.id ? { ...i, claimed_by: patch.claimed_by } : i))
+    );
+    try {
+      await supa(`${TABLE}?id=eq.${item.id}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify(patch),
+      });
+    } catch (e) {
+      setError("Couldn't save that change — " + (e && e.message ? e.message : "unknown error"));
+      loadTheirs(OTHER[currentUser]);
+    }
+  }
+
+  if (!currentUser) {
+    return (
+      <div style={styles.root}>
+        <div style={styles.pickWrap}>
+          <p style={styles.eyebrow}>wishlist keeper</p>
+          <h1 style={styles.pickTitle}>Who's checking in?</h1>
+          <div style={styles.pickRow}>
+            {Object.keys(PEOPLE).map((p) => (
+              <button
+                key={p}
+                onClick={() => chooseUser(p)}
+                style={{ ...styles.pickTile, borderColor: PEOPLE[p].accent }}
+              >
+                <span style={{ ...styles.pickName, color: PEOPLE[p].accent }}>
+                  {PEOPLE[p].name}
+                </span>
+              </button>
+            ))}
+          </div>
+          <p style={styles.pickHint}>
+            Your own list stays private to you until it's given. What you pick from
+            the other list stays private from them.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const other = OTHER[currentUser];
+  const list = view === "mine" ? myItems : theirItems;
+
+  return (
+    <div style={styles.root}>
+      <div style={styles.app}>
+        <header style={styles.header}>
+          <div>
+            <p style={styles.eyebrow}>wishlist keeper</p>
+            <h1 style={{ ...styles.name, color: PEOPLE[currentUser].accent }}>
+              {PEOPLE[currentUser].name}
+            </h1>
+          </div>
+          <button onClick={switchUser} style={styles.switchBtn}>
+            switch
+          </button>
+        </header>
+
+        <nav style={styles.tabs}>
+          <button
+            onClick={() => setView("mine")}
+            style={{
+              ...styles.tab,
+              ...(view === "mine" ? styles.tabActive : {}),
+              ...(view === "mine"
+                ? { borderColor: PEOPLE[currentUser].accent, color: PEOPLE[currentUser].accent }
+                : {}),
+            }}
+          >
+            My list
+          </button>
+          <button
+            onClick={() => setView("theirs")}
+            style={{
+              ...styles.tab,
+              ...(view === "theirs" ? styles.tabActive : {}),
+              ...(view === "theirs"
+                ? { borderColor: PEOPLE[other].accent, color: PEOPLE[other].accent }
+                : {}),
+            }}
+          >
+            {PEOPLE[other].name}'s list
+          </button>
+        </nav>
+
+        {error && <p style={styles.errorText}>{error}</p>}
+        {loading && <p style={styles.emptyText}>Loading…</p>}
+
+        {!loading && view === "mine" && (
+          <section>
+            <div style={styles.form}>
+              <p style={styles.formLabel}>Add something you'd like</p>
+              <input
+                style={styles.input}
+                placeholder="What is it?"
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && addItem()}
+              />
+              <input
+                style={styles.input}
+                placeholder="Link (optional)"
+                value={form.link}
+                onChange={(e) => setForm((f) => ({ ...f, link: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && addItem()}
+              />
+              <input
+                style={styles.input}
+                placeholder="Size, colour, anything to note (optional)"
+                value={form.note}
+                onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && addItem()}
+              />
+              <button
+                type="button"
+                onClick={addItem}
+                style={{ ...styles.addBtn, background: PEOPLE[currentUser].accent }}
+              >
+                Add to list
+              </button>
+            </div>
+
+            <div style={styles.divider} />
+
+            {list.length === 0 ? (
+              <p style={styles.emptyText}>
+                Nothing on your list yet — add the first thing you're hoping for.
+              </p>
+            ) : (
+              list.map((item) => (
+                <div key={item.id} style={styles.row}>
+                  <div style={styles.rowMain}>
+                    <p style={styles.itemName}>{item.name}</p>
+                    {item.link && (
+                      <a
+                        href={item.link}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ ...styles.itemLink, color: PEOPLE[currentUser].accent }}
+                      >
+                        view link ↗
+                      </a>
+                    )}
+                    {item.note && <p style={styles.itemNote}>{item.note}</p>}
+                  </div>
+                  <button
+                    onClick={() => removeItem(item.id)}
+                    style={styles.removeBtn}
+                    title="Remove once you've received it"
+                  >
+                    received
+                  </button>
+                </div>
+              ))
+            )}
+          </section>
+        )}
+
+        {!loading && view === "theirs" && (
+          <section>
+            {list.length === 0 ? (
+              <p style={styles.emptyText}>{PEOPLE[other].name} hasn't added anything yet.</p>
+            ) : (
+              list.map((item) => {
+                const claimedByMe = item.claimed_by === currentUser;
+                const claimedBySomeoneElse = item.claimed_by && item.claimed_by !== currentUser;
+                return (
+                  <div key={item.id} style={styles.row}>
+                    <div style={styles.rowMain}>
+                      <p style={styles.itemName}>{item.name}</p>
+                      {item.link && (
+                        <a
+                          href={item.link}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ ...styles.itemLink, color: PEOPLE[other].accent }}
+                        >
+                          view link ↗
+                        </a>
+                      )}
+                      {item.note && <p style={styles.itemNote}>{item.note}</p>}
+                    </div>
+                    <button
+                      onClick={() => toggleClaim(item)}
+                      disabled={claimedBySomeoneElse}
+                      style={{
+                        ...styles.claimBtn,
+                        ...(claimedByMe
+                          ? { background: PEOPLE[other].accent, color: "#fff", borderColor: PEOPLE[other].accent }
+                          : {}),
+                        ...(claimedBySomeoneElse ? styles.claimBtnDisabled : {}),
+                      }}
+                    >
+                      {claimedByMe ? "you've got this" : claimedBySomeoneElse ? "spoken for" : "I'll get this"}
+                    </button>
+                  </div>
+                );
+              })
+            )}
+            <p style={styles.pickHint}>
+              {PEOPLE[other].name} can't see what's claimed — pick freely.
+            </p>
+          </section>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const styles = {
+  root: {
+    minHeight: "100%",
+    background: "#EAE6DA",
+    fontFamily: "'IBM Plex Sans', sans-serif",
+    color: "#2A241E",
+    display: "flex",
+    justifyContent: "center",
+  },
+  app: { width: "100%", maxWidth: 420, padding: "28px 20px 60px", boxSizing: "border-box" },
+  pickWrap: { width: "100%", maxWidth: 420, padding: "48px 24px", boxSizing: "border-box", textAlign: "center" },
+  eyebrow: { fontSize: 13, letterSpacing: "0.02em", color: "#8A8171", margin: "0 0 4px" },
+  pickTitle: { fontFamily: "'Fraunces', serif", fontStyle: "italic", fontWeight: 500, fontSize: 30, margin: "0 0 28px", color: "#2A241E" },
+  pickRow: { display: "flex", gap: 14, justifyContent: "center", marginBottom: 24 },
+  pickTile: { flex: 1, padding: "22px 12px", borderRadius: 10, border: "1.5px solid", background: "#F6F3EA", cursor: "pointer" },
+  pickName: { fontFamily: "'Fraunces', serif", fontSize: 20, fontWeight: 500 },
+  pickHint: { fontSize: 13, color: "#8A8171", lineHeight: 1.5, marginTop: 18 },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 18 },
+  name: { fontFamily: "'Fraunces', serif", fontWeight: 500, fontSize: 30, margin: "2px 0 0" },
+  switchBtn: { background: "none", border: "none", color: "#8A8171", fontSize: 13, textDecoration: "underline", cursor: "pointer", padding: 4 },
+  tabs: { display: "flex", gap: 18, borderBottom: "1px solid #D8D2C2", marginBottom: 22 },
+  tab: { background: "none", border: "none", borderBottom: "2px solid transparent", padding: "0 0 10px", fontSize: 15, color: "#8A8171", cursor: "pointer", fontFamily: "'IBM Plex Sans', sans-serif" },
+  tabActive: { fontWeight: 600 },
+  form: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 },
+  formLabel: { fontSize: 13, color: "#8A8171", margin: "0 0 2px" },
+  input: { border: "none", borderBottom: "1px solid #D8D2C2", background: "transparent", padding: "8px 2px", fontSize: 15, fontFamily: "'IBM Plex Sans', sans-serif", color: "#2A241E", outline: "none" },
+  addBtn: { marginTop: 6, border: "none", color: "#fff", padding: "12px 16px", borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "'IBM Plex Sans', sans-serif" },
+  divider: { height: 1, background: "#D8D2C2", margin: "4px 0 18px" },
+  emptyText: { color: "#8A8171", fontSize: 14, lineHeight: 1.6, padding: "12px 0" },
+  row: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "16px 0", borderBottom: "1px solid #E2DDCE" },
+  rowMain: { flex: 1 },
+  itemName: { fontSize: 16, fontWeight: 500, margin: "0 0 4px" },
+  itemLink: { fontSize: 13, textDecoration: "none", display: "inline-block", marginBottom: 4 },
+  itemNote: { fontSize: 13, color: "#8A8171", margin: 0, lineHeight: 1.5 },
+  removeBtn: { flexShrink: 0, background: "none", border: "1px solid #C9C2AE", color: "#6B6459", borderRadius: 20, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontFamily: "'IBM Plex Sans', sans-serif" },
+  claimBtn: { flexShrink: 0, background: "#fff", border: "1px solid #C9C2AE", color: "#2A241E", borderRadius: 20, padding: "7px 14px", fontSize: 12, cursor: "pointer", fontFamily: "'IBM Plex Sans', sans-serif", whiteSpace: "nowrap" },
+  claimBtnDisabled: { opacity: 0.5, cursor: "not-allowed" },
+  errorText: { color: "#7A2B3A", fontSize: 13, marginBottom: 12 },
+};
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>
