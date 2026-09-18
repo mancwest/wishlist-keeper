@@ -41,6 +41,14 @@ async function supa(path, options = {}) {
   }
 }
 
+async function hashPin(pin) {
+  const enc = new TextEncoder().encode(pin);
+  const buf = await crypto.subtle.digest("SHA-256", enc);
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [ready, setReady] = useState(false);
@@ -51,6 +59,11 @@ export default function App() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [pendingUser, setPendingUser] = useState(null);
+  const [pinMode, setPinMode] = useState(null); // "set" | "enter"
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [pinChecking, setPinChecking] = useState(false);
   const pollRef = useRef(null);
 
   useEffect(() => {
@@ -89,8 +102,64 @@ export default function App() {
     return () => clearInterval(pollRef.current);
   }, [currentUser, refreshAll]);
 
-  function chooseUser(person) {
-    setCurrentUser(person);
+  async function startPinFlow(person) {
+    setPendingUser(person);
+    setPinInput("");
+    setPinError("");
+    setPinChecking(true);
+    try {
+      const rows = await supa(`wishlist_pins?owner=eq.${person}&select=pin_hash`);
+      setPinMode(rows && rows.length > 0 ? "enter" : "set");
+    } catch (e) {
+      setPinError("Couldn't check PIN status — " + (e && e.message ? e.message : "unknown error"));
+      setPendingUser(null);
+    } finally {
+      setPinChecking(false);
+    }
+  }
+
+  async function submitPin() {
+    const pin = pinInput.trim();
+    if (pin.length < 4) {
+      setPinError("Use at least 4 digits.");
+      return;
+    }
+    setPinChecking(true);
+    setPinError("");
+    try {
+      const hash = await hashPin(pin);
+      if (pinMode === "set") {
+        await supa("wishlist_pins", {
+          method: "POST",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ owner: pendingUser, pin_hash: hash }),
+        });
+        setCurrentUser(pendingUser);
+        setPendingUser(null);
+        setPinMode(null);
+      } else {
+        const rows = await supa(`wishlist_pins?owner=eq.${pendingUser}&select=pin_hash`);
+        const stored = rows && rows[0] && rows[0].pin_hash;
+        if (stored === hash) {
+          setCurrentUser(pendingUser);
+          setPendingUser(null);
+          setPinMode(null);
+        } else {
+          setPinError("Wrong PIN — try again.");
+        }
+      }
+    } catch (e) {
+      setPinError("Something went wrong — " + (e && e.message ? e.message : "unknown error"));
+    } finally {
+      setPinChecking(false);
+    }
+  }
+
+  function cancelPin() {
+    setPendingUser(null);
+    setPinMode(null);
+    setPinInput("");
+    setPinError("");
   }
 
   function switchUser() {
@@ -166,6 +235,62 @@ export default function App() {
     );
   }
 
+  if (!currentUser && pendingUser) {
+    const p = PEOPLE[pendingUser];
+    return (
+      <div style={styles.root}>
+        <StyleBlock />
+        <div style={styles.pickWrap}>
+          <span style={{ fontSize: 40 }}>{p.emoji}</span>
+          <h1 style={{ ...styles.pickTitle, color: p.accent }}>
+            {pinChecking && !pinMode
+              ? "One sec…"
+              : pinMode === "set"
+              ? `Set a PIN for ${p.name}`
+              : `Enter ${p.name}'s PIN`}
+          </h1>
+          {pinMode === "set" && (
+            <p style={styles.pickHint}>
+              First time here — pick a PIN (4+ digits) you'll use to get into your own list from now on.
+            </p>
+          )}
+          {pinMode && (
+            <>
+              <input
+                style={{ ...styles.input, textAlign: "center", fontSize: 20, letterSpacing: 4, marginBottom: 12 }}
+                type="password"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                placeholder="••••"
+                value={pinInput}
+                onChange={(e) => setPinInput(e.target.value.replace(/\D/g, ""))}
+                onKeyDown={(e) => e.key === "Enter" && submitPin()}
+                autoFocus
+              />
+              {pinError && <p style={styles.errorText}>⚠️ {pinError}</p>}
+              <button
+                type="button"
+                onClick={submitPin}
+                disabled={pinChecking}
+                style={{
+                  ...styles.addBtn,
+                  background: `linear-gradient(135deg, ${p.accent}, ${p.accent2})`,
+                  width: "100%",
+                  opacity: pinChecking ? 0.6 : 1,
+                }}
+              >
+                {pinChecking ? "✨ checking…" : pinMode === "set" ? "Set PIN & continue" : "Continue"}
+              </button>
+              <button type="button" onClick={cancelPin} style={{ ...styles.switchBtn, marginTop: 14 }}>
+                ← back
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (!currentUser) {
     return (
       <div style={styles.root}>
@@ -178,7 +303,7 @@ export default function App() {
             {Object.keys(PEOPLE).map((p) => (
               <button
                 key={p}
-                onClick={() => chooseUser(p)}
+                onClick={() => startPinFlow(p)}
                 style={{
                   ...styles.pickTile,
                   borderColor: PEOPLE[p].accent,
