@@ -5,10 +5,18 @@ const SUPABASE_KEY = "sb_publishable_5KM1-wSwj-00TlvCBJoMDw_iRselgOk";
 const TABLE = "wishlist_items";
 
 const PEOPLE = {
-  tony: { name: "Tony", accent: "#128C7E", accent2: "#4FD1C5", emoji: "🌻" },
-  sarah: { name: "Sarah", accent: "#D6336C", accent2: "#F783AC", emoji: "🌸" },
+  tony: { name: "Tony", role: "adult", accent: "#128C7E", accent2: "#4FD1C5", emoji: "🌻" },
+  sarah: { name: "Sarah", role: "adult", accent: "#D6336C", accent2: "#F783AC", emoji: "🌸" },
+  amelia: { name: "Amelia", role: "kid", accent: "#7048C4", accent2: "#C7A9FF", emoji: "🦄" },
+  noah: { name: "Noah", role: "kid", accent: "#1C7ED6", accent2: "#74C0FC", emoji: "🚀" },
 };
-const OTHER = { tony: "sarah", sarah: "tony" };
+// Who each person is allowed to browse & claim from. Empty = can only see their own list.
+const VIEW_ACCESS = {
+  tony: ["sarah", "amelia", "noah"],
+  sarah: ["tony", "amelia", "noah"],
+  amelia: [],
+  noah: [],
+};
 const REFRESH_MS = 15000;
 
 const OCCASIONS = [
@@ -96,7 +104,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [myItems, setMyItems] = useState([]);
   const [theirItems, setTheirItems] = useState([]);
-  const [view, setView] = useState("mine");
+  const [view, setView] = useState("mine"); // "mine" | a PEOPLE key
   const [form, setForm] = useState(EMPTY_FORM);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -111,7 +119,7 @@ export default function App() {
   const [filterMine, setFilterMine] = useState("");
   const [filterTheirs, setFilterTheirs] = useState("");
   const [sortTheirs, setSortTheirs] = useState("newest");
-  const [pickerOpenFor, setPickerOpenFor] = useState(null); // "add" | "edit" | null
+  const [pickerOpenFor, setPickerOpenFor] = useState(null);
   const pollRef = useRef(null);
 
   useEffect(() => {
@@ -137,23 +145,35 @@ export default function App() {
     setTheirItems(rows || []);
   }, []);
 
-  const refreshAll = useCallback(async () => {
-    if (!currentUser) return;
-    try {
-      await Promise.all([loadMine(currentUser), loadTheirs(OTHER[currentUser])]);
-      setError("");
-    } catch (e) {
-      setError("Couldn't reach the server — " + (e && e.message ? e.message : "unknown error"));
-    }
-  }, [currentUser, loadMine, loadTheirs]);
-
+  // Initial load of your own list on login
   useEffect(() => {
     if (!currentUser) return;
     setLoading(true);
-    refreshAll().finally(() => setLoading(false));
-    pollRef.current = setInterval(refreshAll, REFRESH_MS);
+    loadMine(currentUser).finally(() => setLoading(false));
+  }, [currentUser, loadMine]);
+
+  // Load whichever list is being browsed whenever the tab changes
+  useEffect(() => {
+    if (!currentUser || view === "mine") return;
+    setLoading(true);
+    loadTheirs(view).finally(() => setLoading(false));
+  }, [view, currentUser, loadTheirs]);
+
+  // Poll: keep the active view(s) fresh
+  useEffect(() => {
+    if (!currentUser) return;
+    pollRef.current = setInterval(() => {
+      loadMine(currentUser).catch(() =>
+        setError("Couldn't reach the server — check your connection.")
+      );
+      if (view !== "mine") {
+        loadTheirs(view).catch(() =>
+          setError("Couldn't reach the server — check your connection.")
+        );
+      }
+    }, REFRESH_MS);
     return () => clearInterval(pollRef.current);
-  }, [currentUser, refreshAll]);
+  }, [currentUser, view, loadMine, loadTheirs]);
 
   async function startPinFlow(person) {
     setPendingUser(person);
@@ -350,7 +370,7 @@ export default function App() {
       });
     } catch (e) {
       setError("Couldn't save that change — " + (e && e.message ? e.message : "unknown error"));
-      loadTheirs(OTHER[currentUser]);
+      loadTheirs(view);
     }
   }
 
@@ -369,7 +389,7 @@ export default function App() {
       });
     } catch (e) {
       setError("Couldn't save that change — " + (e && e.message ? e.message : "unknown error"));
-      loadTheirs(OTHER[currentUser]);
+      loadTheirs(view);
     }
   }
 
@@ -481,7 +501,7 @@ export default function App() {
           <p style={styles.groovyRow}>☮️ 🌈 ✌️</p>
           <p style={styles.eyebrow}>wishlist keeper</p>
           <h1 style={styles.pickTitle}>Who's checking in, groovy one?</h1>
-          <div style={styles.pickRow}>
+          <div style={styles.pickGrid}>
             {Object.keys(PEOPLE).map((p) => (
               <button
                 key={p}
@@ -501,16 +521,16 @@ export default function App() {
           </div>
           <p style={styles.pickHint}>
             🤫 Your own list stays private to you until it's given. What you pick from
-            the other list stays private from them.
+            someone else's list stays private from them.
           </p>
         </div>
       </div>
     );
   }
 
-  const other = OTHER[currentUser];
   const me = PEOPLE[currentUser];
-  const partner = PEOPLE[other];
+  const viewableList = VIEW_ACCESS[currentUser] || [];
+  const partner = view !== "mine" ? PEOPLE[view] : null;
 
   const mineOccasions = Array.from(new Set(myItems.map((i) => i.occasion).filter(Boolean)));
   const theirsOccasions = Array.from(new Set(theirItems.map((i) => i.occasion).filter(Boolean)));
@@ -577,26 +597,33 @@ export default function App() {
           </button>
         </header>
 
-        <nav style={styles.tabs}>
-          <button
-            onClick={() => setView("mine")}
-            style={{
-              ...styles.tab,
-              ...(view === "mine" ? { ...styles.tabActive, background: me.accent, color: "#fff" } : {}),
-            }}
-          >
-            🎁 My list
-          </button>
-          <button
-            onClick={() => setView("theirs")}
-            style={{
-              ...styles.tab,
-              ...(view === "theirs" ? { ...styles.tabActive, background: partner.accent, color: "#fff" } : {}),
-            }}
-          >
-            💝 {partner.name}'s list
-          </button>
-        </nav>
+        {viewableList.length > 0 && (
+          <nav style={styles.tabs}>
+            <button
+              onClick={() => setView("mine")}
+              style={{
+                ...styles.tab,
+                ...(view === "mine" ? { ...styles.tabActive, background: me.accent, color: "#fff" } : {}),
+              }}
+            >
+              🎁 My list
+            </button>
+            {viewableList.map((key) => (
+              <button
+                key={key}
+                onClick={() => setView(key)}
+                style={{
+                  ...styles.tab,
+                  ...(view === key
+                    ? { ...styles.tabActive, background: PEOPLE[key].accent, color: "#fff" }
+                    : {}),
+                }}
+              >
+                {PEOPLE[key].emoji} {PEOPLE[key].name}
+              </button>
+            ))}
+          </nav>
+        )}
 
         {error && <p style={styles.errorText}>⚠️ {error}</p>}
         {loading && <p style={styles.emptyText}>✨ loading the good vibes…</p>}
@@ -673,6 +700,10 @@ export default function App() {
                 {submitting ? "✨ adding…" : "➕ Add to list"}
               </button>
             </div>
+
+            {me.role === "kid" && (
+              <p style={styles.pickHint}>🎁 Dad and Sarah can peek at this list to plan surprises for you!</p>
+            )}
 
             {renderFilterChips(mineOccasions, filterMine, setFilterMine)}
 
@@ -785,7 +816,7 @@ export default function App() {
           </section>
         )}
 
-        {!loading && view === "theirs" && (
+        {!loading && view !== "mine" && partner && (
           <section>
             {renderFilterChips(theirsOccasions, filterTheirs, setFilterTheirs)}
             {theirItems.some((i) => i.priority) && (
@@ -893,14 +924,14 @@ const styles = {
   pickWrap: { width: "100%", maxWidth: 440, padding: "48px 24px", boxSizing: "border-box", textAlign: "center" },
   groovyRow: { fontSize: 26, margin: "0 0 6px", letterSpacing: 4 },
   eyebrow: { fontSize: 13, letterSpacing: "0.04em", color: "#9C8A6B", margin: "0 0 4px", fontWeight: 600, textTransform: "uppercase" },
-  pickTitle: { fontFamily: "'Fredoka', sans-serif", fontWeight: 600, fontSize: 30, margin: "0 0 28px", color: "#3A2E1F" },
-  pickRow: { display: "flex", gap: 16, justifyContent: "center", marginBottom: 24 },
+  pickTitle: { fontFamily: "'Fredoka', sans-serif", fontWeight: 600, fontSize: 28, margin: "0 0 28px", color: "#3A2E1F" },
+  pickGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 24 },
   pickTile: {
-    flex: 1, padding: "26px 12px", borderRadius: 24, border: "2.5px solid", cursor: "pointer",
+    padding: "22px 10px", borderRadius: 22, border: "2.5px solid", cursor: "pointer",
     display: "flex", flexDirection: "column", alignItems: "center", gap: 8, boxShadow: "0 6px 0 rgba(0,0,0,0.06)",
   },
-  pickEmoji: { fontSize: 34 },
-  pickName: { fontFamily: "'Fredoka', sans-serif", fontSize: 20, fontWeight: 600 },
+  pickEmoji: { fontSize: 30 },
+  pickName: { fontFamily: "'Fredoka', sans-serif", fontSize: 18, fontWeight: 600 },
   pickHint: { fontSize: 13, color: "#9C8A6B", lineHeight: 1.6, marginTop: 18 },
   header: { display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 20 },
   name: { fontFamily: "'Fredoka', sans-serif", fontWeight: 700, fontSize: 32, margin: "2px 0 0" },
@@ -908,10 +939,13 @@ const styles = {
     background: "#fff", border: "2px solid #E8DFCB", color: "#6B5B3E", fontSize: 13, fontWeight: 600,
     cursor: "pointer", padding: "8px 14px", borderRadius: 999, fontFamily: "'Quicksand', sans-serif",
   },
-  tabs: { display: "flex", gap: 10, marginBottom: 18, background: "#F3EAD6", padding: 6, borderRadius: 999 },
+  tabs: {
+    display: "flex", gap: 8, marginBottom: 18, background: "#F3EAD6", padding: 6, borderRadius: 999,
+    overflowX: "auto",
+  },
   tab: {
-    flex: 1, background: "transparent", border: "none", borderRadius: 999, padding: "10px 8px", fontSize: 14,
-    fontWeight: 600, color: "#8A7A5C", cursor: "pointer", fontFamily: "'Quicksand', sans-serif",
+    flexShrink: 0, background: "transparent", border: "none", borderRadius: 999, padding: "10px 14px", fontSize: 13,
+    fontWeight: 600, color: "#8A7A5C", cursor: "pointer", fontFamily: "'Quicksand', sans-serif", whiteSpace: "nowrap",
   },
   tabActive: { boxShadow: "0 3px 0 rgba(0,0,0,0.08)" },
   form: {
