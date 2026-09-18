@@ -1,25 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Wishlist Keeper</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-  html, body { margin: 0; padding: 0; }
-  #root { min-height: 100vh; }
-  * { box-sizing: border-box; }
-</style>
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-</head>
-<body>
-<div id="root"></div>
-<script type="text/babel">
-const { useState, useEffect, useCallback, useRef } = React;
+import React, { useState, useEffect, useCallback, useRef } from "react";
 
 const SUPABASE_URL = "https://tlkzuuovqqdvniytpgni.supabase.co";
 const SUPABASE_KEY = "sb_publishable_5KM1-wSwj-00TlvCBJoMDw_iRselgOk";
@@ -62,7 +41,7 @@ async function supa(path, options = {}) {
   }
 }
 
-function App() {
+export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [ready, setReady] = useState(false);
   const [myItems, setMyItems] = useState([]);
@@ -182,13 +161,15 @@ function App() {
   if (!ready) {
     return (
       <div style={styles.root}>
-        </div>
+        <StyleBlock />
+      </div>
     );
   }
 
   if (!currentUser) {
     return (
       <div style={styles.root}>
+        <StyleBlock />
         <div style={styles.pickWrap}>
           <p style={styles.groovyRow}>☮️ 🌈 ✌️</p>
           <p style={styles.eyebrow}>wishlist keeper</p>
@@ -227,6 +208,7 @@ function App() {
 
   return (
     <div style={styles.root}>
+      <StyleBlock />
       <div style={styles.app}>
         <header style={styles.header}>
           <div>
@@ -393,6 +375,14 @@ function App() {
   );
 }
 
+function StyleBlock() {
+  return (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Quicksand:wght@400;500;600;700&display=swap');
+    `}</style>
+  );
+}
+
 const styles = {
   root: {
     minHeight: "100%",
@@ -533,9 +523,3 @@ const styles = {
   claimBtnDisabled: { opacity: 0.5, cursor: "not-allowed" },
   errorText: { color: "#D6336C", fontSize: 13, marginBottom: 12, fontWeight: 600 },
 };
-
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(<App />);
-</script>
-</body>
-</html>
