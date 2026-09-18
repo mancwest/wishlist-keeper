@@ -32,8 +32,48 @@ const PEOPLE = {
 const OTHER = { tony: "sarah", sarah: "tony" };
 const REFRESH_MS = 15000;
 
+const OCCASIONS = [
+  { value: "", label: "Any occasion" },
+  { value: "birthday", label: "🎂 Birthday" },
+  { value: "christmas", label: "🎄 Christmas" },
+  { value: "anniversary", label: "💍 Anniversary" },
+  { value: "other", label: "✨ Other" },
+];
+const PRIORITIES = [
+  { value: "", label: "No priority set" },
+  { value: "low", label: "Low", color: "#17A398" },
+  { value: "med", label: "Medium", color: "#F2994A" },
+  { value: "high", label: "High", color: "#D6336C" },
+];
+const PRICE_RANGES = [
+  { value: "", label: "No price range" },
+  { value: "under_50", label: "Under $50" },
+  { value: "50_150", label: "$50 – $150" },
+  { value: "150_plus", label: "$150+" },
+];
+const EMOJI_OPTIONS = [
+  "🎁","🎀","🎉","🎊","🕯️","📚","📖","✏️","🎨","🖌️","🎭","🎮","🕹️","🎲","🧩",
+  "🎧","🎵","🎸","🥁","🎹","📷","📸","🎬","🍿","☕","🍵","🍫","🍰","🧁","🍕",
+  "🍔","👕","👗","👟","👜","💄","💍","👑","🕶️","⌚","📱","💻","🖥️","🖨️","⌨️",
+  "🧴","🧼","🌿","🌻","🌸","🌼","🌺","🍀","🌈","☀️","🌙","⭐","✨","💫","🔥",
+  "💧","❄️","🏕️","⛺","🚴","🏄","🏂","⚽","🏀","🎾","🏓","🥊","🧘","🚗","✈️",
+  "🐶","🐱","🐦","🐠","🦋","🐝","🍄","🌱","🛠️","🧰","🪴","🧸","🎈","🎯","🔮",
+];
+
+function priorityMeta(v) {
+  return PRIORITIES.find((p) => p.value === v) || null;
+}
+function occasionLabel(v) {
+  const found = OCCASIONS.find((o) => o.value === v);
+  return found ? found.label : null;
+}
+function priceLabel(v) {
+  const found = PRICE_RANGES.find((p) => p.value === v);
+  return found ? found.label : null;
+}
+
 function normalizeLink(raw) {
-  const trimmed = raw.trim();
+  const trimmed = (raw || "").trim();
   if (!trimmed) return "";
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return "https://" + trimmed;
@@ -70,37 +110,50 @@ async function hashPin(pin) {
     .join("");
 }
 
+const EMPTY_FORM = { name: "", link: "", note: "", occasion: "", priority: "", priceRange: "", photoUrl: "", emoji: "🎁" };
+
 function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [ready, setReady] = useState(false);
   const [myItems, setMyItems] = useState([]);
   const [theirItems, setTheirItems] = useState([]);
   const [view, setView] = useState("mine");
-  const [form, setForm] = useState({ name: "", link: "", note: "" });
+  const [form, setForm] = useState(EMPTY_FORM);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [pendingUser, setPendingUser] = useState(null);
-  const [pinMode, setPinMode] = useState(null); // "set" | "enter"
+  const [pinMode, setPinMode] = useState(null);
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState("");
   const [pinChecking, setPinChecking] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(EMPTY_FORM);
+  const [filterMine, setFilterMine] = useState("");
+  const [filterTheirs, setFilterTheirs] = useState("");
+  const [sortTheirs, setSortTheirs] = useState("newest");
+  const [pickerOpenFor, setPickerOpenFor] = useState(null); // "add" | "edit" | null
   const pollRef = useRef(null);
 
   useEffect(() => {
     setReady(true);
   }, []);
 
+  const SELECT_MINE =
+    "id,name,link,note,occasion,priority,price_range,photo_url,emoji,created_at";
+  const SELECT_THEIRS =
+    "id,name,link,note,occasion,priority,price_range,photo_url,emoji,created_at,claimed_by,purchased";
+
   const loadMine = useCallback(async (person) => {
     const rows = await supa(
-      `${TABLE}?owner=eq.${person}&select=id,name,link,note,created_at&order=created_at.desc`
+      `${TABLE}?owner=eq.${person}&select=${SELECT_MINE}&order=created_at.desc`
     );
     setMyItems(rows || []);
   }, []);
 
   const loadTheirs = useCallback(async (person) => {
     const rows = await supa(
-      `${TABLE}?owner=eq.${person}&select=id,name,link,note,created_at,claimed_by&order=created_at.desc`
+      `${TABLE}?owner=eq.${person}&select=${SELECT_THEIRS}&order=created_at.desc`
     );
     setTheirItems(rows || []);
   }, []);
@@ -188,6 +241,9 @@ function App() {
     setView("mine");
     setMyItems([]);
     setTheirItems([]);
+    setEditingId(null);
+    setFilterMine("");
+    setFilterTheirs("");
   }
 
   async function addItem() {
@@ -202,6 +258,11 @@ function App() {
       name: form.name.trim(),
       link: normalizeLink(form.link),
       note: form.note.trim(),
+      occasion: form.occasion || null,
+      priority: form.priority || null,
+      price_range: form.priceRange || null,
+      photo_url: normalizeLink(form.photoUrl),
+      emoji: form.emoji || "🎁",
     };
     setSubmitting(true);
     try {
@@ -210,7 +271,8 @@ function App() {
         headers: { Prefer: "return=minimal" },
         body: JSON.stringify(payload),
       });
-      setForm({ name: "", link: "", note: "" });
+      setForm(EMPTY_FORM);
+      setPickerOpenFor(null);
       await loadMine(currentUser);
     } catch (e) {
       setError("Couldn't save that — " + (e && e.message ? e.message : "unknown error"));
@@ -219,7 +281,58 @@ function App() {
     }
   }
 
-  async function removeItem(id) {
+  function startEdit(item) {
+    setEditingId(item.id);
+    setPickerOpenFor(null);
+    setEditForm({
+      name: item.name || "",
+      link: item.link || "",
+      note: item.note || "",
+      occasion: item.occasion || "",
+      priority: item.priority || "",
+      priceRange: item.price_range || "",
+      photoUrl: item.photo_url || "",
+      emoji: item.emoji || "🎁",
+    });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditForm(EMPTY_FORM);
+    setPickerOpenFor(null);
+  }
+
+  async function saveEdit(id) {
+    if (!editForm.name.trim()) {
+      setError("Give it a name before saving.");
+      return;
+    }
+    const payload = {
+      name: editForm.name.trim(),
+      link: normalizeLink(editForm.link),
+      note: editForm.note.trim(),
+      occasion: editForm.occasion || null,
+      priority: editForm.priority || null,
+      price_range: editForm.priceRange || null,
+      photo_url: normalizeLink(editForm.photoUrl),
+      emoji: editForm.emoji || "🎁",
+    };
+    try {
+      await supa(`${TABLE}?id=eq.${id}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify(payload),
+      });
+      setMyItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...payload } : i)));
+      setEditingId(null);
+      setEditForm(EMPTY_FORM);
+      setPickerOpenFor(null);
+    } catch (e) {
+      setError("Couldn't save your changes — " + (e && e.message ? e.message : "unknown error"));
+    }
+  }
+
+  async function removeItemRow(id) {
     try {
       await supa(`${TABLE}?id=eq.${id}`, { method: "DELETE" });
       setMyItems((prev) => prev.filter((i) => i.id !== id));
@@ -228,13 +341,27 @@ function App() {
     }
   }
 
+  function receivedItem(id) {
+    removeItemRow(id);
+  }
+
+  function deleteItem(id) {
+    if (window.confirm("Remove this item from your list? This can't be undone.")) {
+      removeItemRow(id);
+    }
+  }
+
   async function toggleClaim(item) {
     const isMine = item.claimed_by === currentUser;
     const patch = isMine
-      ? { claimed_by: null, claimed_at: null }
+      ? { claimed_by: null, claimed_at: null, purchased: false, purchased_at: null }
       : { claimed_by: currentUser, claimed_at: new Date().toISOString() };
     setTheirItems((prev) =>
-      prev.map((i) => (i.id === item.id ? { ...i, claimed_by: patch.claimed_by } : i))
+      prev.map((i) =>
+        i.id === item.id
+          ? { ...i, claimed_by: patch.claimed_by, purchased: isMine ? false : i.purchased }
+          : i
+      )
     );
     try {
       await supa(`${TABLE}?id=eq.${item.id}`, {
@@ -246,6 +373,61 @@ function App() {
       setError("Couldn't save that change — " + (e && e.message ? e.message : "unknown error"));
       loadTheirs(OTHER[currentUser]);
     }
+  }
+
+  async function togglePurchased(item) {
+    const patch = item.purchased
+      ? { purchased: false, purchased_at: null }
+      : { purchased: true, purchased_at: new Date().toISOString() };
+    setTheirItems((prev) =>
+      prev.map((i) => (i.id === item.id ? { ...i, purchased: patch.purchased } : i))
+    );
+    try {
+      await supa(`${TABLE}?id=eq.${item.id}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify(patch),
+      });
+    } catch (e) {
+      setError("Couldn't save that change — " + (e && e.message ? e.message : "unknown error"));
+      loadTheirs(OTHER[currentUser]);
+    }
+  }
+
+  function renderEmojiPicker(current, onPick, context) {
+    const isOpen = pickerOpenFor === context;
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={() => setPickerOpenFor(isOpen ? null : context)}
+          style={styles.emojiToggle}
+        >
+          <span style={{ fontSize: 22 }}>{current || "🎁"}</span>
+          <span style={{ fontSize: 12, color: "#8A7A5C" }}>{isOpen ? "close" : "choose icon"}</span>
+        </button>
+        {isOpen && (
+          <div style={styles.emojiGrid}>
+            {EMOJI_OPTIONS.map((em) => (
+              <button
+                type="button"
+                key={em}
+                onClick={() => {
+                  onPick(em);
+                  setPickerOpenFor(null);
+                }}
+                style={{
+                  ...styles.emojiOption,
+                  ...(em === current ? styles.emojiOptionSelected : {}),
+                }}
+              >
+                {em}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   }
 
   if (!ready) {
@@ -345,9 +527,59 @@ function App() {
   }
 
   const other = OTHER[currentUser];
-  const list = view === "mine" ? myItems : theirItems;
   const me = PEOPLE[currentUser];
   const partner = PEOPLE[other];
+
+  const mineOccasions = Array.from(new Set(myItems.map((i) => i.occasion).filter(Boolean)));
+  const theirsOccasions = Array.from(new Set(theirItems.map((i) => i.occasion).filter(Boolean)));
+
+  let mineList = filterMine ? myItems.filter((i) => i.occasion === filterMine) : myItems;
+  let theirsList = filterTheirs ? theirItems.filter((i) => i.occasion === filterTheirs) : theirItems;
+  if (sortTheirs === "priority") {
+    const rank = { high: 0, med: 1, low: 2, "": 3, null: 3 };
+    theirsList = [...theirsList].sort((a, b) => (rank[a.priority || ""] ?? 3) - (rank[b.priority || ""] ?? 3));
+  }
+
+  function renderBadges(item) {
+    const pm = priorityMeta(item.priority);
+    const oc = occasionLabel(item.occasion);
+    const pr = priceLabel(item.price_range);
+    if (!pm && !oc && !pr) return null;
+    return (
+      <div style={styles.badgeRow}>
+        {oc && <span style={styles.badge}>{oc}</span>}
+        {pm && (
+          <span style={{ ...styles.badge, background: pm.color + "22", color: pm.color, fontWeight: 700 }}>
+            {pm.label} priority
+          </span>
+        )}
+        {pr && <span style={styles.badge}>{pr}</span>}
+      </div>
+    );
+  }
+
+  function renderFilterChips(occasions, activeFilter, setFilter) {
+    if (occasions.length === 0) return null;
+    return (
+      <div style={styles.chipRow}>
+        <button
+          onClick={() => setFilter("")}
+          style={{ ...styles.chip, ...(activeFilter === "" ? styles.chipActive : {}) }}
+        >
+          All
+        </button>
+        {occasions.map((o) => (
+          <button
+            key={o}
+            onClick={() => setFilter(o)}
+            style={{ ...styles.chip, ...(activeFilter === o ? styles.chipActive : {}) }}
+          >
+            {occasionLabel(o) || o}
+          </button>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div style={styles.root}>
@@ -367,9 +599,7 @@ function App() {
             onClick={() => setView("mine")}
             style={{
               ...styles.tab,
-              ...(view === "mine"
-                ? { ...styles.tabActive, background: me.accent, color: "#fff" }
-                : {}),
+              ...(view === "mine" ? { ...styles.tabActive, background: me.accent, color: "#fff" } : {}),
             }}
           >
             🎁 My list
@@ -378,9 +608,7 @@ function App() {
             onClick={() => setView("theirs")}
             style={{
               ...styles.tab,
-              ...(view === "theirs"
-                ? { ...styles.tabActive, background: partner.accent, color: "#fff" }
-                : {}),
+              ...(view === "theirs" ? { ...styles.tabActive, background: partner.accent, color: "#fff" } : {}),
             }}
           >
             💝 {partner.name}'s list
@@ -394,6 +622,7 @@ function App() {
           <section>
             <div style={{ ...styles.form, borderColor: me.accent2 }}>
               <p style={styles.formLabel}>✨ Add something you'd like</p>
+              {renderEmojiPicker(form.emoji, (em) => setForm((f) => ({ ...f, emoji: em })), "add")}
               <input
                 style={styles.input}
                 placeholder="What is it?"
@@ -408,11 +637,45 @@ function App() {
               />
               <input
                 style={styles.input}
+                placeholder="📸 Photo URL (optional)"
+                value={form.photoUrl}
+                onChange={(e) => setForm((f) => ({ ...f, photoUrl: e.target.value }))}
+              />
+              <input
+                style={styles.input}
                 placeholder="📝 Size, colour, anything to note (optional)"
                 value={form.note}
                 onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
-                onKeyDown={(e) => e.key === "Enter" && addItem()}
               />
+              <div style={styles.selectRow}>
+                <select
+                  style={styles.select}
+                  value={form.occasion}
+                  onChange={(e) => setForm((f) => ({ ...f, occasion: e.target.value }))}
+                >
+                  {OCCASIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+                <select
+                  style={styles.select}
+                  value={form.priority}
+                  onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value }))}
+                >
+                  {PRIORITIES.map((p) => (
+                    <option key={p.value} value={p.value}>{p.label}</option>
+                  ))}
+                </select>
+              </div>
+              <select
+                style={styles.select}
+                value={form.priceRange}
+                onChange={(e) => setForm((f) => ({ ...f, priceRange: e.target.value }))}
+              >
+                {PRICE_RANGES.map((p) => (
+                  <option key={p.value} value={p.value}>{p.label}</option>
+                ))}
+              </select>
               <button
                 type="button"
                 onClick={addItem}
@@ -428,87 +691,191 @@ function App() {
               </button>
             </div>
 
-            {list.length === 0 ? (
+            {renderFilterChips(mineOccasions, filterMine, setFilterMine)}
+
+            {mineList.length === 0 ? (
               <p style={styles.emptyText}>
-                🌼 Nothing on your list yet — add the first thing you're hoping for.
+                🌼 Nothing here yet — add the first thing you're hoping for.
               </p>
             ) : (
-              list.map((item) => (
-                <div key={item.id} style={{ ...styles.row, borderLeftColor: me.accent }}>
-                  <div style={styles.rowMain}>
-                    <p style={styles.itemName}>🎁 {item.name}</p>
-                    {item.link && (
-                      <a
-                        href={item.link}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ ...styles.itemLink, color: me.accent }}
+              mineList.map((item) =>
+                editingId === item.id ? (
+                  <div key={item.id} style={{ ...styles.form, borderColor: me.accent2, marginBottom: 12 }}>
+                    <p style={styles.formLabel}>✏️ Editing</p>
+                    {renderEmojiPicker(editForm.emoji, (em) => setEditForm((f) => ({ ...f, emoji: em })), "edit")}
+                    <input
+                      style={styles.input}
+                      placeholder="What is it?"
+                      value={editForm.name}
+                      onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                    />
+                    <input
+                      style={styles.input}
+                      placeholder="🔗 Link (optional)"
+                      value={editForm.link}
+                      onChange={(e) => setEditForm((f) => ({ ...f, link: e.target.value }))}
+                    />
+                    <input
+                      style={styles.input}
+                      placeholder="📸 Photo URL (optional)"
+                      value={editForm.photoUrl}
+                      onChange={(e) => setEditForm((f) => ({ ...f, photoUrl: e.target.value }))}
+                    />
+                    <input
+                      style={styles.input}
+                      placeholder="📝 Note (optional)"
+                      value={editForm.note}
+                      onChange={(e) => setEditForm((f) => ({ ...f, note: e.target.value }))}
+                    />
+                    <div style={styles.selectRow}>
+                      <select
+                        style={styles.select}
+                        value={editForm.occasion}
+                        onChange={(e) => setEditForm((f) => ({ ...f, occasion: e.target.value }))}
                       >
-                        🔗 view link
-                      </a>
-                    )}
-                    {item.note && <p style={styles.itemNote}>📝 {item.note}</p>}
+                        {OCCASIONS.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                      <select
+                        style={styles.select}
+                        value={editForm.priority}
+                        onChange={(e) => setEditForm((f) => ({ ...f, priority: e.target.value }))}
+                      >
+                        {PRIORITIES.map((p) => (
+                          <option key={p.value} value={p.value}>{p.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <select
+                      style={styles.select}
+                      value={editForm.priceRange}
+                      onChange={(e) => setEditForm((f) => ({ ...f, priceRange: e.target.value }))}
+                    >
+                      {PRICE_RANGES.map((p) => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
+                      ))}
+                    </select>
+                    <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+                      <button
+                        type="button"
+                        onClick={() => saveEdit(item.id)}
+                        style={{ ...styles.addBtn, flex: 1, background: `linear-gradient(135deg, ${me.accent}, ${me.accent2})` }}
+                      >
+                        💾 Save
+                      </button>
+                      <button type="button" onClick={cancelEdit} style={{ ...styles.removeBtn, flex: 1 }}>
+                        Cancel
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => removeItem(item.id)}
-                    style={styles.removeBtn}
-                    title="Remove once you've received it"
-                  >
-                    📦 received
-                  </button>
-                </div>
-              ))
+                ) : (
+                  <div key={item.id} style={{ ...styles.row, borderLeftColor: me.accent }}>
+                    {item.photo_url && (
+                      <img src={item.photo_url} alt="" style={styles.thumb} onError={(e) => (e.target.style.display = "none")} />
+                    )}
+                    <div style={styles.rowMain}>
+                      <p style={styles.itemName}>{item.emoji || "🎁"} {item.name}</p>
+                      {renderBadges(item)}
+                      {item.link && (
+                        <a href={item.link} target="_blank" rel="noreferrer" style={{ ...styles.itemLink, color: me.accent }}>
+                          🔗 view link
+                        </a>
+                      )}
+                      {item.note && <p style={styles.itemNote}>📝 {item.note}</p>}
+                    </div>
+                    <div style={styles.rowActions}>
+                      <button onClick={() => startEdit(item)} style={styles.iconBtn} title="Edit">
+                        ✏️
+                      </button>
+                      <button onClick={() => receivedItem(item.id)} style={styles.removeBtn} title="Remove once you've received it">
+                        📦 received
+                      </button>
+                      <button onClick={() => deleteItem(item.id)} style={styles.iconBtn} title="Delete — changed your mind">
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                )
+              )
             )}
           </section>
         )}
 
         {!loading && view === "theirs" && (
           <section>
-            {list.length === 0 ? (
+            {renderFilterChips(theirsOccasions, filterTheirs, setFilterTheirs)}
+            {theirItems.some((i) => i.priority) && (
+              <div style={styles.chipRow}>
+                <button
+                  onClick={() => setSortTheirs("newest")}
+                  style={{ ...styles.chip, ...(sortTheirs === "newest" ? styles.chipActive : {}) }}
+                >
+                  🕓 Newest
+                </button>
+                <button
+                  onClick={() => setSortTheirs("priority")}
+                  style={{ ...styles.chip, ...(sortTheirs === "priority" ? styles.chipActive : {}) }}
+                >
+                  🔥 Priority
+                </button>
+              </div>
+            )}
+            {theirsList.length === 0 ? (
               <p style={styles.emptyText}>🌼 {partner.name} hasn't added anything yet.</p>
             ) : (
-              list.map((item) => {
+              theirsList.map((item) => {
                 const claimedByMe = item.claimed_by === currentUser;
                 const claimedBySomeoneElse = item.claimed_by && item.claimed_by !== currentUser;
                 return (
                   <div key={item.id} style={{ ...styles.row, borderLeftColor: partner.accent }}>
+                    {item.photo_url && (
+                      <img src={item.photo_url} alt="" style={styles.thumb} onError={(e) => (e.target.style.display = "none")} />
+                    )}
                     <div style={styles.rowMain}>
-                      <p style={styles.itemName}>🎁 {item.name}</p>
+                      <p style={styles.itemName}>{item.emoji || "🎁"} {item.name}</p>
+                      {renderBadges(item)}
                       {item.link && (
-                        <a
-                          href={item.link}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ ...styles.itemLink, color: partner.accent }}
-                        >
+                        <a href={item.link} target="_blank" rel="noreferrer" style={{ ...styles.itemLink, color: partner.accent }}>
                           🔗 view link
                         </a>
                       )}
                       {item.note && <p style={styles.itemNote}>📝 {item.note}</p>}
                     </div>
-                    <button
-                      onClick={() => toggleClaim(item)}
-                      disabled={claimedBySomeoneElse}
-                      style={{
-                        ...styles.claimBtn,
-                        ...(claimedByMe
-                          ? {
-                              background: `linear-gradient(135deg, ${partner.accent}, ${partner.accent2})`,
-                              color: "#fff",
-                              borderColor: partner.accent,
-                            }
-                          : {}),
-                        ...(claimedBySomeoneElse ? styles.claimBtnDisabled : {}),
-                      }}
-                    >
-                      {claimedByMe ? "✅ you've got this" : claimedBySomeoneElse ? "🙅 spoken for" : "🎁 I'll get this"}
-                    </button>
+                    <div style={styles.rowActions}>
+                      <button
+                        onClick={() => toggleClaim(item)}
+                        disabled={claimedBySomeoneElse}
+                        style={{
+                          ...styles.claimBtn,
+                          ...(claimedByMe
+                            ? { background: `linear-gradient(135deg, ${partner.accent}, ${partner.accent2})`, color: "#fff", borderColor: partner.accent }
+                            : {}),
+                          ...(claimedBySomeoneElse ? styles.claimBtnDisabled : {}),
+                        }}
+                      >
+                        {claimedByMe ? "✅ you've got this" : claimedBySomeoneElse ? "🙅 spoken for" : "🎁 I'll get this"}
+                      </button>
+                      {claimedByMe && (
+                        <button
+                          onClick={() => togglePurchased(item)}
+                          style={{
+                            ...styles.claimBtn,
+                            ...(item.purchased
+                              ? { background: "#3A2E1F", color: "#fff", borderColor: "#3A2E1F" }
+                              : {}),
+                          }}
+                        >
+                          {item.purchased ? "🛍️ purchased" : "mark purchased"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })
             )}
             <p style={styles.pickHint}>
-              🤫 {partner.name} can't see what's claimed — pick freely.
+              🤫 {partner.name} can't see what's claimed or purchased — pick freely.
             </p>
           </section>
         )}
@@ -538,16 +905,8 @@ const styles = {
   pickTitle: { fontFamily: "'Fredoka', sans-serif", fontWeight: 600, fontSize: 30, margin: "0 0 28px", color: "#3A2E1F" },
   pickRow: { display: "flex", gap: 16, justifyContent: "center", marginBottom: 24 },
   pickTile: {
-    flex: 1,
-    padding: "26px 12px",
-    borderRadius: 24,
-    border: "2.5px solid",
-    cursor: "pointer",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: 8,
-    boxShadow: "0 6px 0 rgba(0,0,0,0.06)",
+    flex: 1, padding: "26px 12px", borderRadius: 24, border: "2.5px solid", cursor: "pointer",
+    display: "flex", flexDirection: "column", alignItems: "center", gap: 8, boxShadow: "0 6px 0 rgba(0,0,0,0.06)",
   },
   pickEmoji: { fontSize: 34 },
   pickName: { fontFamily: "'Fredoka', sans-serif", fontSize: 20, fontWeight: 600 },
@@ -555,107 +914,79 @@ const styles = {
   header: { display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 20 },
   name: { fontFamily: "'Fredoka', sans-serif", fontWeight: 700, fontSize: 32, margin: "2px 0 0" },
   switchBtn: {
-    background: "#fff",
-    border: "2px solid #E8DFCB",
-    color: "#6B5B3E",
-    fontSize: 13,
-    fontWeight: 600,
-    cursor: "pointer",
-    padding: "8px 14px",
-    borderRadius: 999,
-    fontFamily: "'Quicksand', sans-serif",
+    background: "#fff", border: "2px solid #E8DFCB", color: "#6B5B3E", fontSize: 13, fontWeight: 600,
+    cursor: "pointer", padding: "8px 14px", borderRadius: 999, fontFamily: "'Quicksand', sans-serif",
   },
-  tabs: { display: "flex", gap: 10, marginBottom: 22, background: "#F3EAD6", padding: 6, borderRadius: 999 },
+  tabs: { display: "flex", gap: 10, marginBottom: 18, background: "#F3EAD6", padding: 6, borderRadius: 999 },
   tab: {
-    flex: 1,
-    background: "transparent",
-    border: "none",
-    borderRadius: 999,
-    padding: "10px 8px",
-    fontSize: 14,
-    fontWeight: 600,
-    color: "#8A7A5C",
-    cursor: "pointer",
-    fontFamily: "'Quicksand', sans-serif",
+    flex: 1, background: "transparent", border: "none", borderRadius: 999, padding: "10px 8px", fontSize: 14,
+    fontWeight: 600, color: "#8A7A5C", cursor: "pointer", fontFamily: "'Quicksand', sans-serif",
   },
   tabActive: { boxShadow: "0 3px 0 rgba(0,0,0,0.08)" },
   form: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-    marginBottom: 22,
-    background: "#fff",
-    border: "2px dashed",
-    borderRadius: 20,
-    padding: 16,
+    display: "flex", flexDirection: "column", gap: 10, marginBottom: 18,
+    background: "#fff", border: "2px dashed", borderRadius: 20, padding: 16,
   },
   formLabel: { fontSize: 14, color: "#6B5B3E", margin: "0 0 2px", fontWeight: 700 },
   input: {
-    border: "2px solid #EEE3CC",
-    borderRadius: 14,
-    background: "#FFFDF8",
-    padding: "10px 14px",
-    fontSize: 15,
-    fontFamily: "'Quicksand', sans-serif",
-    color: "#3A2E1F",
-    outline: "none",
+    border: "2px solid #EEE3CC", borderRadius: 14, background: "#FFFDF8", padding: "10px 14px",
+    fontSize: 15, fontFamily: "'Quicksand', sans-serif", color: "#3A2E1F", outline: "none",
+  },
+  selectRow: { display: "flex", gap: 10 },
+  select: {
+    flex: 1, border: "2px solid #EEE3CC", borderRadius: 14, background: "#FFFDF8", padding: "10px 10px",
+    fontSize: 14, fontFamily: "'Quicksand', sans-serif", color: "#3A2E1F", outline: "none",
   },
   addBtn: {
-    marginTop: 6,
-    border: "none",
-    color: "#fff",
-    padding: "13px 16px",
-    borderRadius: 999,
-    fontSize: 15,
-    fontWeight: 700,
-    cursor: "pointer",
-    fontFamily: "'Fredoka', sans-serif",
-    boxShadow: "0 4px 0 rgba(0,0,0,0.12)",
+    marginTop: 6, border: "none", color: "#fff", padding: "13px 16px", borderRadius: 999, fontSize: 15,
+    fontWeight: 700, cursor: "pointer", fontFamily: "'Fredoka', sans-serif", boxShadow: "0 4px 0 rgba(0,0,0,0.12)",
   },
   emptyText: { color: "#9C8A6B", fontSize: 14, lineHeight: 1.6, padding: "12px 0", textAlign: "center" },
-  row: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 12,
-    padding: "16px 16px",
-    marginBottom: 12,
-    background: "#fff",
-    borderRadius: 16,
-    borderLeft: "6px solid",
-    boxShadow: "0 3px 10px rgba(58,46,31,0.06)",
+  chipRow: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 },
+  chip: {
+    border: "2px solid #EEE3CC", background: "#fff", color: "#6B5B3E", borderRadius: 999, padding: "6px 12px",
+    fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif",
   },
-  rowMain: { flex: 1 },
+  chipActive: { background: "#3A2E1F", borderColor: "#3A2E1F", color: "#fff" },
+  row: {
+    display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "16px 16px",
+    marginBottom: 12, background: "#fff", borderRadius: 16, borderLeft: "6px solid", boxShadow: "0 3px 10px rgba(58,46,31,0.06)",
+  },
+  thumb: { width: 56, height: 56, borderRadius: 12, objectFit: "cover", flexShrink: 0 },
+  rowMain: { flex: 1, minWidth: 0 },
   itemName: { fontSize: 16, fontWeight: 700, margin: "0 0 4px", fontFamily: "'Fredoka', sans-serif" },
+  badgeRow: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 },
+  badge: { fontSize: 11, fontWeight: 600, background: "#F3EAD6", color: "#6B5B3E", borderRadius: 999, padding: "3px 9px" },
   itemLink: { fontSize: 13, textDecoration: "none", display: "inline-block", marginBottom: 4, fontWeight: 600 },
   itemNote: { fontSize: 13, color: "#8A7A5C", margin: 0, lineHeight: 1.5 },
+  rowActions: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 },
+  iconBtn: {
+    background: "#FFF8ED", border: "2px solid #EEE3CC", borderRadius: 999, width: 30, height: 30,
+    fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+  },
   removeBtn: {
-    flexShrink: 0,
-    background: "#FFF8ED",
-    border: "2px solid #EEE3CC",
-    color: "#6B5B3E",
-    borderRadius: 999,
-    padding: "7px 14px",
-    fontSize: 12,
-    fontWeight: 700,
-    cursor: "pointer",
-    fontFamily: "'Quicksand', sans-serif",
+    flexShrink: 0, background: "#FFF8ED", border: "2px solid #EEE3CC", color: "#6B5B3E", borderRadius: 999,
+    padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif",
   },
   claimBtn: {
-    flexShrink: 0,
-    background: "#fff",
-    border: "2px solid #EEE3CC",
-    color: "#3A2E1F",
-    borderRadius: 999,
-    padding: "8px 14px",
-    fontSize: 12,
-    fontWeight: 700,
-    cursor: "pointer",
-    fontFamily: "'Quicksand', sans-serif",
-    whiteSpace: "nowrap",
+    flexShrink: 0, background: "#fff", border: "2px solid #EEE3CC", color: "#3A2E1F", borderRadius: 999,
+    padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Quicksand', sans-serif", whiteSpace: "nowrap",
   },
   claimBtnDisabled: { opacity: 0.5, cursor: "not-allowed" },
   errorText: { color: "#D6336C", fontSize: 13, marginBottom: 12, fontWeight: 600 },
+  emojiToggle: {
+    display: "flex", alignItems: "center", gap: 8, background: "#FFF8ED", border: "2px solid #EEE3CC",
+    borderRadius: 14, padding: "8px 12px", cursor: "pointer", alignSelf: "flex-start",
+  },
+  emojiGrid: {
+    display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8, padding: 10, background: "#FFF8ED",
+    borderRadius: 14, maxHeight: 180, overflowY: "auto",
+  },
+  emojiOption: {
+    fontSize: 20, background: "transparent", border: "2px solid transparent", borderRadius: 10,
+    width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0,
+  },
+  emojiOptionSelected: { background: "#fff", borderColor: "#3A2E1F" },
 };
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
